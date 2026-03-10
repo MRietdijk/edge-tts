@@ -7,6 +7,7 @@ import json
 import ssl
 import time
 import uuid
+import string
 from contextlib import nullcontext
 from io import TextIOWrapper
 from queue import Queue
@@ -274,6 +275,10 @@ def mkssml(tc: TTSConfig, escaped_text: Union[str, bytes]) -> str:
         "</voice>"
         "</speak>"
     )
+
+def remove_interpunction(word: str):
+    translator = str.maketrans('', '', string.punctuation)
+    return word.translate(translator)
 
 
 def date_to_string() -> str:
