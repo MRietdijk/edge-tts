@@ -287,7 +287,11 @@ def split_text_in_words(text: str)-> Generator[bytes, None, None]:
         raise TypeError("text must be str")
 
     for word in text.split():
-        yield remove_interpunction(word.lower()).encode("utf-8")
+        clean_word = remove_interpunction(word.lower())
+        if len(clean_word) == 0:
+            continue
+        
+        yield clean_word.encode("utf-8")
 
 
 def date_to_string() -> str:
