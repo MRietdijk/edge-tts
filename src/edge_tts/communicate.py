@@ -591,13 +591,15 @@ class Communicate:
                 try:
                     for chunk in self.cache[self.state["partial_text"]]:
                         yield chunk
+                    self.cacheHits += 1
                 except KeyError:
                     audio = [chunk async for chunk in self.__stream()]
                     self.cache[self.state['partial_text']] = audio
                     for chunk in audio:
                         yield chunk
-                print(self.cache)
-            
+                    self.cacheMisses += 1
+                # print(self.cache)
+                print(f"hits: {self.cacheHits}, misses: {self.cacheMisses}")
             else:
                 try:
                     async for message in self.__stream():
