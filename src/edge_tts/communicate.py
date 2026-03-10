@@ -276,9 +276,18 @@ def mkssml(tc: TTSConfig, escaped_text: Union[str, bytes]) -> str:
         "</speak>"
     )
 
-def remove_interpunction(word: str):
+
+def remove_interpunction(word: str) -> str:
     translator = str.maketrans('', '', string.punctuation)
     return word.translate(translator)
+
+
+def split_text_in_words(text: str)-> Generator[bytes, None, None]:
+    if not isinstance(text, str):
+        raise TypeError("text must be str")
+
+    for word in text.split():
+        yield remove_interpunction(word).encode("utf-8")
 
 
 def date_to_string() -> str:
