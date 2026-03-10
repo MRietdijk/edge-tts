@@ -337,6 +337,7 @@ class Communicate:
         rate: str = "+0%",
         volume: str = "+0%",
         pitch: str = "+0Hz",
+        energy_safe_mode: bool = False,
         boundary: Literal["WordBoundary", "SentenceBoundary"] = "SentenceBoundary",
         connector: Optional[aiohttp.BaseConnector] = None,
         proxy: Optional[str] = None,
@@ -350,11 +351,16 @@ class Communicate:
         if not isinstance(text, str):
             raise TypeError("text must be str")
 
-        # Split the text into multiple strings and store them.
-        self.texts = split_text_by_byte_length(
-            escape(remove_incompatible_characters(text)),
-            4096,
-        )
+        self.energy_safe_mode: bool = energy_safe_mode
+        if self.energy_safe_mode:
+            self.cache: Dict[bytes, List[TTSChunk]] = {}
+            self.texts = split_text_in_words(text)
+        else: 
+            # Split the text into multiple strings and store them.
+            self.texts = split_text_by_byte_length(
+                escape(remove_incompatible_characters(text)),
+                4096,
+            )
 
         # Validate the proxy parameter.
         if proxy is not None and not isinstance(proxy, str):
@@ -576,16 +582,29 @@ class Communicate:
 
         # Stream the audio and metadata from the service.
         for self.state["partial_text"] in self.texts:
-            try:
-                async for message in self.__stream():
-                    yield message
-            except aiohttp.ClientResponseError as e:
-                if e.status != 403:
-                    raise
+            
+            if self.energy_safe_mode:
+                try:
+                    for chunk in self.cache[self.state["partial_text"]]:
+                        yield chunk
+                except KeyError:
+                    audio = [chunk async for chunk in self.__stream()]
+                    self.cache[self.state['partial_text']] = audio
+                    for chunk in audio:
+                        yield chunk
+                print(self.cache)
+            
+            else:
+                try:
+                    async for message in self.__stream():
+                        yield message
+                except aiohttp.ClientResponseError as e:
+                    if e.status != 403:
+                        raise
 
-                DRM.handle_client_response_error(e)
-                async for message in self.__stream():
-                    yield message
+                    DRM.handle_client_response_error(e)
+                    async for message in self.__stream():
+                        yield message
 
     async def save(
         self,
