@@ -369,6 +369,8 @@ class Communicate:
         # Validate the proxy parameter.
         if proxy is not None and not isinstance(proxy, str):
             raise TypeError("proxy must be str")
+        self.cacheHits = 0
+        self.cacheMisses = 0
         self.proxy: Optional[str] = proxy
 
         # Validate the timeout parameters.

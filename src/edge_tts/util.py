@@ -12,6 +12,10 @@ from .constants import DEFAULT_VOICE
 from .data_classes import UtilArgs
 from .version import __version__
 
+from pydub import AudioSegment
+from pydub.silence import split_on_silence
+from io import BytesIO
+
 
 async def _print_voices(*, proxy: Optional[str]) -> None:
     """Print all available voices."""
@@ -50,6 +54,7 @@ async def _run_tts(args: UtilArgs) -> None:
     communicate = Communicate(
         args.text,
         args.voice,
+        energy_safe_mode=True,
         rate=args.rate,
         volume=args.volume,
         pitch=args.pitch,
@@ -83,6 +88,21 @@ async def _run_tts(args: UtilArgs) -> None:
             audio_file.close()
         if sub_file is not None and sub_file is not sys.stderr:
             sub_file.close()
+
+        audio = AudioSegment.from_mp3(args.write_media)
+
+        chunks = split_on_silence(
+            audio,
+            min_silence_len=300,
+            silence_thresh=-20, 
+            keep_silence=80     
+        )
+
+        processed = AudioSegment.empty()
+        for c in chunks:
+            processed += c
+
+        processed.export(args.write_media, format="mp3")
 
 
 async def amain() -> None:
