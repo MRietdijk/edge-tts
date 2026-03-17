@@ -95,7 +95,7 @@ async def _run_tts(args: UtilArgs) -> None:
             audio,
             min_silence_len=300,
             silence_thresh=-20, 
-            keep_silence=80     
+            keep_silence=130     
         )
 
         processed = AudioSegment.empty()

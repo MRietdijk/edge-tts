@@ -22,6 +22,7 @@ from typing import (
     Union,
 )
 from xml.sax.saxutils import escape, unescape
+from .audio_cache import AudioCache
 
 import aiohttp
 import certifi
@@ -357,7 +358,7 @@ class Communicate:
 
         self.energy_safe_mode: bool = energy_safe_mode
         if self.energy_safe_mode:
-            self.cache: Dict[bytes, List[TTSChunk]] = {}
+            self.disk_cache = AudioCache()
             self.texts = split_text_in_words(text)
         else: 
             # Split the text into multiple strings and store them.
@@ -590,18 +591,19 @@ class Communicate:
         for self.state["partial_text"] in self.texts:
             
             if self.energy_safe_mode:
-                try:
-                    for chunk in self.cache[self.state["partial_text"]]:
-                        yield chunk
-                    self.cacheHits += 1
-                except KeyError:
-                    audio = [chunk async for chunk in self.__stream()]
-                    self.cache[self.state['partial_text']] = audio
-                    for chunk in audio:
-                        yield chunk
-                    self.cacheMisses += 1
-                # print(self.cache)
-                print(f"hits: {self.cacheHits}, misses: {self.cacheMisses}")
+               word = self.state["partial_text"]
+               cached = self.disk_cache.get(word)
+               if cached is not None:
+                   for chunk in cached:
+                       yield chunk
+                   self.cacheHits += 1
+               else:
+                   audio = [chunk async for chunk in self.__stream()]
+                   self.disk_cache.put(word, audio)
+                   for chunk in audio:
+                       yield chunk
+                   self.cacheMisses += 1
+               print(f"hits: {self.cacheHits}, misses: {self.cacheMisses}")
             else:
                 try:
                     async for message in self.__stream():
@@ -613,6 +615,9 @@ class Communicate:
                     DRM.handle_client_response_error(e)
                     async for message in self.__stream():
                         yield message
+        
+        if self.energy_safe_mode:
+           self.disk_cache.save_index()
 
     async def save(
         self,
