@@ -22,7 +22,7 @@ from typing import (
     Union,
 )
 from xml.sax.saxutils import escape, unescape
-from .audio_cache import AudioCache, CacheInterface, AudioCachePerWord, DictCache
+from .audio_cache import AudioCache, CacheInterface, AudioCachePerWord, DictCache, CachePerWordDictCache
 
 import aiohttp
 import certifi
@@ -358,7 +358,7 @@ class Communicate:
 
         self.energy_safe_mode: bool = energy_safe_mode
         if self.energy_safe_mode:
-            self.disk_cache: CacheInterface = DictCache()
+            self.disk_cache: CacheInterface = CachePerWordDictCache()
             self.texts = split_text_in_words(text)
         else: 
             # Split the text into multiple strings and store them.

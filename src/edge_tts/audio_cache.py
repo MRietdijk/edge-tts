@@ -236,3 +236,23 @@ class DictCache(CacheInterface):
             raise KeyError(f"Cache entry {key} already exists!")
         
         self.cache[key] = data
+
+class CachePerWordDictCache(CacheInterface):
+    def __init__(self) -> None:
+        self.dict_cache = DictCache()
+        self.word_cache = AudioCachePerWord()
+
+    def get(self, word: str) -> Optional[List[TTSChunk]]:
+        result = self.dict_cache.get(word)
+        if result is not None: 
+            return result
+        
+        result = self.word_cache.get(word)
+        if result is None:
+            return
+        self.dict_cache.put(word, result)
+        return result
+    
+    def put(self, key: str, data: List[TTSChunk]):
+        self.word_cache.put(key, data)
+        self.dict_cache.put(key, data)
