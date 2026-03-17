@@ -22,7 +22,7 @@ from typing import (
     Union,
 )
 from xml.sax.saxutils import escape, unescape
-from .audio_cache import AudioCache
+from .audio_cache import AudioCache, CacheInterface
 
 import aiohttp
 import certifi
@@ -358,7 +358,7 @@ class Communicate:
 
         self.energy_safe_mode: bool = energy_safe_mode
         if self.energy_safe_mode:
-            self.disk_cache = AudioCache()
+            self.disk_cache: CacheInterface = AudioCache()
             self.texts = split_text_in_words(text)
         else: 
             # Split the text into multiple strings and store them.
@@ -615,9 +615,11 @@ class Communicate:
                     DRM.handle_client_response_error(e)
                     async for message in self.__stream():
                         yield message
-        
-        if self.energy_safe_mode:
-           self.disk_cache.save_index()
+        try:
+            if self.energy_safe_mode:
+                self.disk_cache.save_index()
+        except AttributeError:
+            pass
 
     async def save(
         self,

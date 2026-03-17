@@ -9,12 +9,22 @@ import json
 import mmap
 import os
 import struct
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
+from abc import ABC, abstractmethod
 
 from .typing import TTSChunk
 
+class CacheInterface(ABC):
+    @abstractmethod
+    def get(self, word: Any) -> Any:
+        pass
 
-class AudioCache:
+    @abstractmethod
+    def put(self, key: Any, data: Any) -> None:
+        pass
+
+
+class AudioCache(CacheInterface):
     """
     Persists TTS chunks to disk using a flat binary file + JSON index.
 

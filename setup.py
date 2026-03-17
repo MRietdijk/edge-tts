@@ -8,5 +8,6 @@ setup(
         "certifi>=2023.11.17",
         "tabulate>=0.4.4,<1.0.0",
         "typing-extensions>=4.1.0,<5.0.0",
+        "pydub"
     ],
 )
