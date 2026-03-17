@@ -22,7 +22,7 @@ from typing import (
     Union,
 )
 from xml.sax.saxutils import escape, unescape
-from .audio_cache import AudioCache
+from .audio_cache import AudioCache, CacheInterface, AudioCachePerWord, DictCache, CachePerWordDictCache
 
 import aiohttp
 import certifi
@@ -358,7 +358,7 @@ class Communicate:
 
         self.energy_safe_mode: bool = energy_safe_mode
         if self.energy_safe_mode:
-            self.disk_cache = AudioCache()
+            self.disk_cache: CacheInterface = AudioCache()
             self.texts = split_text_in_words(text)
         else: 
             # Split the text into multiple strings and store them.
@@ -524,6 +524,7 @@ class Communicate:
             raise NoAudioReceived(
                 "No audio was received. Please verify that your parameters are correct."
             )
+    
     async def stream(
         self,
     ) -> AsyncGenerator[TTSChunk, None]:
@@ -577,10 +578,7 @@ class Communicate:
                 else:
                     async for message in self.__receive_response(websocket):
                         yield message
- 
-        if self.energy_safe_mode:
-            self.disk_cache.save_index()
-    
+     
     async def save(
         self,
         audio_fname: Union[str, bytes],

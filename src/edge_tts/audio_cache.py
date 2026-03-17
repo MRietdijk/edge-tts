@@ -9,12 +9,78 @@ import json
 import mmap
 import os
 import struct
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
+from abc import ABC, abstractmethod
+from pathlib import Path
 
 from .typing import TTSChunk
 
+class CacheInterface(ABC):
+    @abstractmethod
+    def get(self, word: str) -> Optional[list[TTSChunk]]:
+        pass
 
-class AudioCache:
+    @abstractmethod
+    def put(self, key: str, data: list[TTSChunk]) -> None:
+        pass
+
+def serialize_chunks(chunks: List[TTSChunk]) -> bytes:
+    """
+    Serialize a list of TTSChunk dicts into bytes.
+    """
+    parts = []
+    # Number of chunks
+    parts.append(struct.pack(">I", len(chunks)))
+
+    for chunk in chunks:
+        if chunk["type"] == "audio":
+            # Header: just the type
+            header = json.dumps({"type": "audio"}).encode("utf-8")
+            audio_data = chunk["data"]
+        else:
+            # Metadata chunk: store everything except 'data' key
+            header = json.dumps({
+                k: v for k, v in chunk.items()
+            }).encode("utf-8")
+            audio_data = b""
+
+        parts.append(struct.pack(">I", len(header)))
+        parts.append(header)
+        parts.append(struct.pack(">I", len(audio_data)))
+        if audio_data:
+            parts.append(audio_data)
+
+    return b"".join(parts)
+
+def deserialize_chunks(blob: bytes) -> List[TTSChunk]:
+    """
+    Deserialize bytes back into a list of TTSChunk dicts.
+    """
+    pos = 0
+    (num_chunks,) = struct.unpack(">I", blob[pos:pos + 4])
+    pos += 4
+
+    chunks: List[TTSChunk] = []
+    for _ in range(num_chunks):
+        (header_len,) = struct.unpack(">I", blob[pos:pos + 4])
+        pos += 4
+        header = json.loads(blob[pos:pos + header_len])
+        pos += header_len
+
+        (audio_len,) = struct.unpack(">I", blob[pos:pos + 4])
+        pos += 4
+
+        if header["type"] == "audio":
+            # Read audio bytes directly from the blob (which is an mmap slice)
+            chunks.append({"type": "audio", "data": blob[pos:pos + audio_len]})
+        else:
+            chunks.append(header)
+
+        pos += audio_len
+
+    return chunks
+
+class AudioCache(CacheInterface):
     """
     Persists TTS chunks to disk using a flat binary file + JSON index.
 
@@ -87,7 +153,7 @@ class AudioCache:
         mm = self._get_mmap()
         blob = mm[offset:offset + length]
 
-        return self._deserialize_chunks(blob)
+        return deserialize_chunks(blob)
 
     def put(self, word: bytes, chunks: List[TTSChunk]) -> None:
         """
@@ -97,7 +163,7 @@ class AudioCache:
         if key in self.index:
             return  # already cached
 
-        blob = self._serialize_chunks(chunks)
+        blob = serialize_chunks(chunks)
 
         self.data_file.seek(0, 2)  # seek to end
         offset = self.data_file.tell()
@@ -106,62 +172,6 @@ class AudioCache:
 
         self.index[key] = {"offset": offset, "length": len(blob)}
         self._invalidate_mmap()
-
-    def _serialize_chunks(self, chunks: List[TTSChunk]) -> bytes:
-        """
-        Serialize a list of TTSChunk dicts into bytes.
-        """
-        parts = []
-        # Number of chunks
-        parts.append(struct.pack(">I", len(chunks)))
-
-        for chunk in chunks:
-            if chunk["type"] == "audio":
-                # Header: just the type
-                header = json.dumps({"type": "audio"}).encode("utf-8")
-                audio_data = chunk["data"]
-            else:
-                # Metadata chunk: store everything except 'data' key
-                header = json.dumps({
-                    k: v for k, v in chunk.items()
-                }).encode("utf-8")
-                audio_data = b""
-
-            parts.append(struct.pack(">I", len(header)))
-            parts.append(header)
-            parts.append(struct.pack(">I", len(audio_data)))
-            if audio_data:
-                parts.append(audio_data)
-
-        return b"".join(parts)
-
-    def _deserialize_chunks(self, blob: bytes) -> List[TTSChunk]:
-        """
-        Deserialize bytes back into a list of TTSChunk dicts.
-        """
-        pos = 0
-        (num_chunks,) = struct.unpack(">I", blob[pos:pos + 4])
-        pos += 4
-
-        chunks: List[TTSChunk] = []
-        for _ in range(num_chunks):
-            (header_len,) = struct.unpack(">I", blob[pos:pos + 4])
-            pos += 4
-            header = json.loads(blob[pos:pos + header_len])
-            pos += header_len
-
-            (audio_len,) = struct.unpack(">I", blob[pos:pos + 4])
-            pos += 4
-
-            if header["type"] == "audio":
-                # Read audio bytes directly from the blob (which is an mmap slice)
-                chunks.append({"type": "audio", "data": blob[pos:pos + audio_len]})
-            else:
-                chunks.append(header)
-
-            pos += audio_len
-
-        return chunks
 
     def save_index(self) -> None:
         """Persist the index to disk."""
@@ -188,3 +198,61 @@ class AudioCache:
             self.close()
         except Exception:
             pass
+
+
+class AudioCachePerWord(CacheInterface):
+    def __init__(self) -> None:
+        self.path: Path = Path('./.cache')
+        os.makedirs(self.path, exist_ok=True)
+
+    def get(self, word: str) -> Optional[List[TTSChunk]]:
+        try:
+            with open(self.path.joinpath(f"{str(word)}.bin"), "rb") as f:
+                return deserialize_chunks(f.read())
+        except FileNotFoundError:
+            return
+        
+    def put(self, key: str, data: list[TTSChunk]) -> None:
+        path = self.path.joinpath(f"{key}.bin")
+        if os.path.isfile(path):
+            raise KeyError(f"Cache file {path} already exists!")
+        
+        with open(path, "wb") as f:
+            f.write(serialize_chunks(data))
+
+
+class DictCache(CacheInterface):
+    def __init__(self) -> None:
+        self.cache = {}
+
+    def get(self, word: str) -> Optional[List[TTSChunk]]:
+        try:
+            return self.cache[word]
+        except KeyError:
+            return
+        
+    def put(self, key: str, data: list[TTSChunk]) -> None:
+        if key in self.cache:
+            raise KeyError(f"Cache entry {key} already exists!")
+        
+        self.cache[key] = data
+
+class CachePerWordDictCache(CacheInterface):
+    def __init__(self) -> None:
+        self.dict_cache = DictCache()
+        self.word_cache = AudioCachePerWord()
+
+    def get(self, word: str) -> Optional[List[TTSChunk]]:
+        result = self.dict_cache.get(word)
+        if result is not None: 
+            return result
+        
+        result = self.word_cache.get(word)
+        if result is None:
+            return
+        self.dict_cache.put(word, result)
+        return result
+    
+    def put(self, key: str, data: List[TTSChunk]):
+        self.word_cache.put(key, data)
+        self.dict_cache.put(key, data)
