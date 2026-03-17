@@ -9,7 +9,7 @@ import json
 import mmap
 import os
 import struct
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Tuple
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -81,20 +81,6 @@ def deserialize_chunks(blob: bytes) -> List[TTSChunk]:
     return chunks
 
 class AudioCache(CacheInterface):
-    """
-    Persists TTS chunks to disk using a flat binary file + JSON index.
-
-    Layout of the .bin file for each word:
-        [4 bytes: number of chunks N]
-        For each chunk:
-            [4 bytes: length of JSON-serialized chunk header]
-            [header bytes: JSON with type, offset, duration, text — no audio data]
-            [4 bytes: length of audio data (0 if not an audio chunk)]
-            [audio bytes]
-
-    The .idx file maps: word (str) -> {"offset": int, "length": int}
-    """
-
     def __init__(self, cache_dir: str = ".tts_cache"):
         self.cache_dir = cache_dir
         os.makedirs(cache_dir, exist_ok=True)
@@ -102,103 +88,72 @@ class AudioCache(CacheInterface):
         self.data_path = os.path.join(cache_dir, "words.bin")
         self.index_path = os.path.join(cache_dir, "words.idx")
 
-        # Load existing index or start fresh
         if os.path.exists(self.index_path):
             with open(self.index_path, "r") as f:
-                self.index: Dict[str, Dict[str, int]] = json.load(f)
+                self.index: Dict[str, Tuple[int, int]] = json.load(f)
         else:
             self.index = {}
 
-        # Open data file for appending new entries
-        self.data_file = open(self.data_path, "a+b")
-        self._mmap: Optional[mmap.mmap] = None
+        self.pre_allocation_size = 10000000 #10 megabytes in bytes
+        self.allocation_pointer = 0
+        self.file_size = 0
 
-    def _invalidate_mmap(self) -> None:
-        """Close current mmap so it gets recreated on next read."""
-        if self._mmap is not None:
-            self._mmap.close()
-            self._mmap = None
+        self._mmap: mmap.mmap = self._construct_mmap()
 
-    def _get_mmap(self) -> mmap.mmap:
-        """Lazily create/recreate the mmap for reading."""
-        if self._mmap is None:
-            self.data_file.flush()
-            size = os.path.getsize(self.data_path)
-            if size == 0:
-                raise ValueError("Cache file is empty, nothing to read")
-            # Open a separate file descriptor for read-only mmap
-            fd = os.open(self.data_path, os.O_RDONLY)
-            try:
-                self._mmap = mmap.mmap(fd, 0, access=mmap.ACCESS_READ)
-            finally:
-                os.close(fd)  # mmap keeps its own reference
-        return self._mmap
+    def _construct_mmap(self) -> mmap.mmap:
+        file_size = os.path.getsize(self.data_path)
+        fd = os.open(self.data_path, os.O_RDWR)
+        self.file_size = file_size +\
+            (self.pre_allocation_size if self.allocation_pointer == 0 else self.allocation_pointer)
+        os.ftruncate(fd, self.file_size)
 
-    def __contains__(self, word: bytes) -> bool:
-        key = word.decode("utf-8") if isinstance(word, bytes) else word
-        return key in self.index
+        new_mmap = mmap.mmap(fd, 0, access=mmap.ACCESS_WRITE)
+        os.close(fd)
+        self._mmap = new_mmap
+        return new_mmap
+    
+    def _invalidate_rebuild(self) -> mmap.mmap:
+        self._mmap.close()
+        new_map = self._construct_mmap()
+        self.allocation_pointer = 0
+        return new_map
 
-    def get(self, word: bytes) -> Optional[List[TTSChunk]]:
-        """
-        Retrieve cached chunks for a word. Returns None on cache miss.
-        """
-        key = word.decode("utf-8") if isinstance(word, bytes) else word
-        if key not in self.index:
-            return None
+    def get(self, word: str) -> Optional[List[TTSChunk]]:
+        try:
+            offset, length = self.index[word]
+        except KeyError:
+            return
 
-        entry = self.index[key]
-        offset = entry["offset"]
-        length = entry["length"]
+        return deserialize_chunks(self._mmap[offset:offset + length])
 
-        mm = self._get_mmap()
-        blob = mm[offset:offset + length]
-
-        return deserialize_chunks(blob)
-
-    def put(self, word: bytes, chunks: List[TTSChunk]) -> None:
-        """
-        Store chunks for a word, appending to the binary file.
-        """
-        key = word.decode("utf-8") if isinstance(word, bytes) else word
+    def put(self, key: str, data: List[TTSChunk]):
         if key in self.index:
-            return  # already cached
+            raise KeyError(f"Cache entry {key} already exists!")
 
-        blob = serialize_chunks(chunks)
+        serialized = serialize_chunks(data)
+        data_size = len(serialized)
+        start = -self.pre_allocation_size + self.allocation_pointer
+        end =  start + data_size
 
-        self.data_file.seek(0, 2)  # seek to end
-        offset = self.data_file.tell()
-        self.data_file.write(blob)
-        self.data_file.flush()
+        if end >= 0:
+            self._invalidate_rebuild()
+            start = -self.pre_allocation_size + self.allocation_pointer
+            end =  start + data_size
 
-        self.index[key] = {"offset": offset, "length": len(blob)}
-        self._invalidate_mmap()
+        self._mmap[start:end] = serialized
+        self.index[key] = (self.file_size + start, data_size)
+        self.allocation_pointer += data_size
 
     def save_index(self) -> None:
-        """Persist the index to disk."""
         with open(self.index_path, "w") as f:
             json.dump(self.index, f)
 
-    def close(self) -> None:
-        """Flush index and close all file handles."""
-        self.save_index()
-        self._invalidate_mmap()
-        self.data_file.close()
-
-    @property
-    def stats(self) -> dict:
-        """Return cache statistics."""
-        return {
-            "words_cached": len(self.index),
-            "file_size_bytes": os.path.getsize(self.data_path)
-            if os.path.exists(self.data_path) else 0,
-        }
-
-    def __del__(self) -> None:
-        try:
-            self.close()
-        except Exception:
-            pass
-
+    def cleanup(self) -> None:
+        self._mmap.close()
+        fd = os.open(self.data_path, os.O_RDWR)
+        new_size = self.file_size - (self.pre_allocation_size - self.allocation_pointer)
+        os.ftruncate(fd, new_size)
+        os.close(fd)
 
 class AudioCachePerWord(CacheInterface):
     def __init__(self) -> None:

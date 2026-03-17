@@ -358,7 +358,7 @@ class Communicate:
 
         self.energy_safe_mode: bool = energy_safe_mode
         if self.energy_safe_mode:
-            self.disk_cache: CacheInterface = CachePerWordDictCache()
+            self.disk_cache: CacheInterface = AudioCache()
             self.texts = split_text_in_words(text)
         else: 
             # Split the text into multiple strings and store them.
@@ -628,6 +628,7 @@ class Communicate:
         try:
             if self.energy_safe_mode:
                 self.disk_cache.save_index()
+                self.disk_cache.cleanup()
         except AttributeError:
             pass
 
