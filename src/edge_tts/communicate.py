@@ -591,19 +591,29 @@ class Communicate:
         for self.state["partial_text"] in self.texts:
             
             if self.energy_safe_mode:
-               word = self.state["partial_text"]
-               cached = self.disk_cache.get(word.decode('utf-8'))
-               if cached is not None:
-                   for chunk in cached:
+                word = self.state["partial_text"]
+                cached = self.disk_cache.get(word.decode('utf-8'))
+                if cached is not None:
+                    for chunk in cached:
                        yield chunk
-                   self.cacheHits += 1
-               else:
-                   audio = [chunk async for chunk in self.__stream()]
-                   self.disk_cache.put(word.decode('utf-8'), audio)
-                   for chunk in audio:
-                       yield chunk
-                   self.cacheMisses += 1
-               print(f"hits: {self.cacheHits}, misses: {self.cacheMisses}")
+                    self.cacheHits += 1
+                else:
+                    audio = []
+                    try:
+                        async for message in self.__stream():
+                            audio.append(message)
+                    except aiohttp.ClientResponseError as e:
+                        if e.status != 403:
+                            raise
+
+                        DRM.handle_client_response_error(e)
+                        async for message in self.__stream():
+                            audio.append(message)
+                    self.disk_cache.put(word.decode('utf-8'), audio)
+                    for chunk in audio:
+                        yield chunk
+                    self.cacheMisses += 1
+                print(f"hits: {self.cacheHits}, misses: {self.cacheMisses}")
             else:
                 try:
                     async for message in self.__stream():
