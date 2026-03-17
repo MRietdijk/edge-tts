@@ -89,22 +89,6 @@ async def _run_tts(args: UtilArgs) -> None:
         if sub_file is not None and sub_file is not sys.stderr:
             sub_file.close()
 
-        audio = AudioSegment.from_mp3(args.write_media)
-
-        chunks = split_on_silence(
-            audio,
-            min_silence_len=300,
-            silence_thresh=-20, 
-            keep_silence=130     
-        )
-
-        processed = AudioSegment.empty()
-        for c in chunks:
-            processed += c
-
-        processed.export(args.write_media, format="mp3")
-
-
 async def amain() -> None:
     """Async main function"""
     parser = argparse.ArgumentParser(
