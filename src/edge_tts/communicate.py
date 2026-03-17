@@ -595,7 +595,18 @@ class Communicate:
                         yield chunk
                     self.cacheHits += 1
                 except KeyError:
-                    audio = [chunk async for chunk in self.__stream()]
+                    audio = []
+                    try:
+                        async for message in self.__stream():
+                            audio.append(message)
+                    except aiohttp.ClientResponseError as e:
+                        if e.status != 403:
+                            raise
+
+                        DRM.handle_client_response_error(e)
+                        async for message in self.__stream():
+                            audio.append(message)
+
                     self.cache[self.state['partial_text']] = audio
                     for chunk in audio:
                         yield chunk
