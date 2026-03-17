@@ -418,43 +418,122 @@ class Communicate:
             raise UnknownResponse(f"Unknown metadata type: {meta_type}")
         raise UnexpectedResponse("No WordBoundary metadata found")
 
-    async def __stream(self) -> AsyncGenerator[TTSChunk, None]:
-        async def send_command_request() -> None:
-            """Sends the command request to the service."""
-            word_boundary = self.tts_config.boundary == "WordBoundary"
-            wd = "true" if word_boundary else "false"
-            sq = "true" if not word_boundary else "false"
-            await websocket.send_str(
-                f"X-Timestamp:{date_to_string()}\r\n"
-                "Content-Type:application/json; charset=utf-8\r\n"
-                "Path:speech.config\r\n\r\n"
-                '{"context":{"synthesis":{"audio":{"metadataoptions":{'
-                f'"sentenceBoundaryEnabled":"{sq}","wordBoundaryEnabled":"{wd}"'
-                "},"
-                '"outputFormat":"audio-24khz-48kbitrate-mono-mp3"'
-                "}}}}\r\n"
+    async def __send_command_request(self, websocket: aiohttp.ClientWebSocketResponse) -> None:
+        """Sends the config command to the service."""
+        word_boundary = self.tts_config.boundary == "WordBoundary"
+        wd = "true" if word_boundary else "false"
+        sq = "true" if not word_boundary else "false"
+        await websocket.send_str(
+            f"X-Timestamp:{date_to_string()}\r\n"
+            "Content-Type:application/json; charset=utf-8\r\n"
+            "Path:speech.config\r\n\r\n"
+            '{"context":{"synthesis":{"audio":{"metadataoptions":{'
+            f'"sentenceBoundaryEnabled":"{sq}","wordBoundaryEnabled":"{wd}"'
+            "},"
+            '"outputFormat":"audio-24khz-48kbitrate-mono-mp3"'
+            "}}}}\r\n"
+        )
+ 
+    async def __send_ssml_request(self, websocket: aiohttp.ClientWebSocketResponse) -> None:
+        """Sends the SSML request for the current word."""
+        await websocket.send_str(
+            ssml_headers_plus_data(
+                connect_id(),
+                date_to_string(),
+                mkssml(
+                    self.tts_config,
+                    self.state["partial_text"],
+                ),
             )
-
-        async def send_ssml_request() -> None:
-            """Sends the SSML request to the service."""
-            await websocket.send_str(
-                ssml_headers_plus_data(
-                    connect_id(),
-                    date_to_string(),
-                    mkssml(
-                        self.tts_config,
-                        self.state["partial_text"],
-                    ),
-                )
-            )
-
-        # audio_was_received indicates whether we have received audio data
-        # from the websocket. This is so we can raise an exception if we
-        # don't receive any audio data.
+        )
+ 
+    async def __receive_response(self, websocket: aiohttp.ClientWebSocketResponse) -> AsyncGenerator[TTSChunk, None]:
+        """Receives audio + metadata for one SSML request over an existing WebSocket."""
         audio_was_received = False
-
-        # Create a new connection to the service.
+ 
+        async for received in websocket:
+            if received.type == aiohttp.WSMsgType.TEXT:
+                encoded_data: bytes = received.data.encode("utf-8")
+                parameters, data = get_headers_and_data(
+                    encoded_data, encoded_data.find(b"\r\n\r\n")
+                )
+ 
+                path = parameters.get(b"Path", None)
+                if path == b"audio.metadata":
+                    parsed_metadata = self.__parse_metadata(data)
+                    yield parsed_metadata
+ 
+                    self.state["last_duration_offset"] = (
+                        parsed_metadata["offset"] + parsed_metadata["duration"]
+                    )
+                elif path == b"turn.end":
+                    self.state["offset_compensation"] = self.state[
+                        "last_duration_offset"
+                    ]
+                    self.state["offset_compensation"] += 8_750_000
+                    break  # done with this word, return control to caller
+                elif path not in (b"response", b"turn.start"):
+                    raise UnknownResponse("Unknown path received")
+            elif received.type == aiohttp.WSMsgType.BINARY:
+                if len(received.data) < 2:
+                    raise UnexpectedResponse(
+                        "We received a binary message, but it is missing the header length."
+                    )
+ 
+                header_length = int.from_bytes(received.data[:2], "big")
+                if header_length > len(received.data):
+                    raise UnexpectedResponse(
+                        "The header length is greater than the length of the data."
+                    )
+ 
+                parameters, data = get_headers_and_data(
+                    received.data, header_length
+                )
+ 
+                if parameters.get(b"Path") != b"audio":
+                    raise UnexpectedResponse(
+                        "Received binary message, but the path is not audio."
+                    )
+ 
+                content_type = parameters.get(b"Content-Type", None)
+                if content_type not in (b"audio/mpeg", None):
+                    raise UnexpectedResponse(
+                        "Received binary message, but with an unexpected Content-Type."
+                    )
+ 
+                if content_type is None:
+                    if len(data) == 0:
+                        continue
+                    raise UnexpectedResponse(
+                        "Received binary message with no Content-Type, but with data."
+                    )
+ 
+                if len(data) == 0:
+                    raise UnexpectedResponse(
+                        "Received binary message, but it is missing the audio data."
+                    )
+ 
+                audio_was_received = True
+                yield {"type": "audio", "data": data}
+            elif received.type == aiohttp.WSMsgType.ERROR:
+                raise WebSocketError(
+                    received.data if received.data else "Unknown error"
+                )
+ 
+        if not audio_was_received:
+            raise NoAudioReceived(
+                "No audio was received. Please verify that your parameters are correct."
+            )
+    async def stream(
+        self,
+    ) -> AsyncGenerator[TTSChunk, None]:
+        if self.state["stream_was_called"]:
+            raise RuntimeError("stream can only be called once.")
+        self.state["stream_was_called"] = True
+ 
         ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+ 
+        # One session, one WebSocket for ALL words
         async with aiohttp.ClientSession(
             connector=self.connector,
             trust_env=True,
@@ -468,157 +547,40 @@ class Communicate:
             headers=DRM.headers_with_muid(WSS_HEADERS),
             ssl=ssl_ctx,
         ) as websocket:
-            await send_command_request()
-
-            await send_ssml_request()
-
-            async for received in websocket:
-                if received.type == aiohttp.WSMsgType.TEXT:
-                    encoded_data: bytes = received.data.encode("utf-8")
-                    parameters, data = get_headers_and_data(
-                        encoded_data, encoded_data.find(b"\r\n\r\n")
-                    )
-
-                    path = parameters.get(b"Path", None)
-                    if path == b"audio.metadata":
-                        # Parse the metadata and yield it.
-                        parsed_metadata = self.__parse_metadata(data)
-                        yield parsed_metadata
-
-                        # Update the last duration offset for use by the next SSML request.
-                        self.state["last_duration_offset"] = (
-                            parsed_metadata["offset"] + parsed_metadata["duration"]
-                        )
-                    elif path == b"turn.end":
-                        # Update the offset compensation for the next SSML request.
-                        self.state["offset_compensation"] = self.state[
-                            "last_duration_offset"
-                        ]
-
-                        # Use average padding typically added by the service
-                        # to the end of the audio data. This seems to work pretty
-                        # well for now, but we might ultimately need to use a
-                        # more sophisticated method like using ffmpeg to get
-                        # the actual duration of the audio data.
-                        self.state["offset_compensation"] += 8_750_000
-
-                        # Exit the loop so we can send the next SSML request.
-                        break
-                    elif path not in (b"response", b"turn.start"):
-                        raise UnknownResponse("Unknown path received")
-                elif received.type == aiohttp.WSMsgType.BINARY:
-                    # Message is too short to contain header length.
-                    if len(received.data) < 2:
-                        raise UnexpectedResponse(
-                            "We received a binary message, but it is missing the header length."
-                        )
-
-                    # The first two bytes of the binary message contain the header length.
-                    header_length = int.from_bytes(received.data[:2], "big")
-                    if header_length > len(received.data):
-                        raise UnexpectedResponse(
-                            "The header length is greater than the length of the data."
-                        )
-
-                    # Parse the headers and data from the binary message.
-                    parameters, data = get_headers_and_data(
-                        received.data, header_length
-                    )
-
-                    # Check if the path is audio.
-                    if parameters.get(b"Path") != b"audio":
-                        raise UnexpectedResponse(
-                            "Received binary message, but the path is not audio."
-                        )
-
-                    # At termination of the stream, the service sends a binary message
-                    # with no Content-Type; this is expected. What is not expected is for
-                    # an audio stream to be sent with no data.
-                    content_type = parameters.get(b"Content-Type", None)
-                    if content_type not in (b"audio/mpeg", None):
-                        raise UnexpectedResponse(
-                            "Received binary message, but with an unexpected Content-Type."
-                        )
-
-                    # We only allow no Content-Type if there is no data.
-                    if content_type is None:
-                        if len(data) == 0:
-                            continue
-
-                        # If the data is not empty, then we need to raise an exception.
-                        raise UnexpectedResponse(
-                            "Received binary message with no Content-Type, but with data."
-                        )
-
-                    # If the data is empty now, then we need to raise an exception.
-                    if len(data) == 0:
-                        raise UnexpectedResponse(
-                            "Received binary message, but it is missing the audio data."
-                        )
-
-                    # Yield the audio data.
-                    audio_was_received = True
-                    yield {"type": "audio", "data": data}
-                elif received.type == aiohttp.WSMsgType.ERROR:
-                    raise WebSocketError(
-                        received.data if received.data else "Unknown error"
-                    )
-
-            if not audio_was_received:
-                raise NoAudioReceived(
-                    "No audio was received. Please verify that your parameters are correct."
-                )
-
-    async def stream(
-        self,
-    ) -> AsyncGenerator[TTSChunk, None]:
-        """
-        Streams audio and metadata from the service.
-
-        Raises:
-            NoAudioReceived: If no audio is received from the service.
-            UnexpectedResponse: If the response from the service is unexpected.
-            UnknownResponse: If the response from the service is unknown.
-            WebSocketError: If there is an error with the websocket.
-        """
-
-        # Check if stream was called before.
-        if self.state["stream_was_called"]:
-            raise RuntimeError("stream can only be called once.")
-        self.state["stream_was_called"] = True
-
-        # Stream the audio and metadata from the service.
-        for self.state["partial_text"] in self.texts:
-            
-            if self.energy_safe_mode:
-               word = self.state["partial_text"]
-               cached = self.disk_cache.get(word)
-               if cached is not None:
-                   for chunk in cached:
-                       yield chunk
-                   self.cacheHits += 1
-               else:
-                   audio = [chunk async for chunk in self.__stream()]
-                   self.disk_cache.put(word, audio)
-                   for chunk in audio:
-                       yield chunk
-                   self.cacheMisses += 1
-               print(f"hits: {self.cacheHits}, misses: {self.cacheMisses}")
-            else:
-                try:
-                    async for message in self.__stream():
+            # Send config once
+            await self.__send_command_request(websocket)
+ 
+            for self.state["partial_text"] in self.texts:
+                if self.energy_safe_mode:
+                    word = self.state["partial_text"]
+                    cached = self.disk_cache.get(word)
+                    if cached is not None:
+                        for chunk in cached:
+                            yield chunk
+                        self.cacheHits += 1
+                        print(f"hits: {self.cacheHits}, misses: {self.cacheMisses}")
+                        continue
+ 
+                # Send SSML for this word over the SAME socket
+                await self.__send_ssml_request(websocket)
+ 
+                if self.energy_safe_mode:
+                    # Collect all chunks so we can cache them
+                    audio: List[TTSChunk] = []
+                    async for chunk in self.__receive_response(websocket):
+                        audio.append(chunk)
+                    self.disk_cache.put(word, audio)
+                    for chunk in audio:
+                        yield chunk
+                    self.cacheMisses += 1
+                    print(f"hits: {self.cacheHits}, misses: {self.cacheMisses}")
+                else:
+                    async for message in self.__receive_response(websocket):
                         yield message
-                except aiohttp.ClientResponseError as e:
-                    if e.status != 403:
-                        raise
-
-                    DRM.handle_client_response_error(e)
-                    async for message in self.__stream():
-                        yield message
-        
+ 
         if self.energy_safe_mode:
-           self.disk_cache.save_index()
-
+            self.disk_cache.save_index()
+    
     async def save(
         self,
         audio_fname: Union[str, bytes],
@@ -642,6 +604,7 @@ class Communicate:
                 ):
                     json.dump(message, metadata)
                     metadata.write("\n")
+
 
     def stream_sync(self) -> Generator[TTSChunk, None, None]:
         """Synchronous interface for async stream method"""
