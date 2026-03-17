@@ -22,7 +22,7 @@ from typing import (
     Union,
 )
 from xml.sax.saxutils import escape, unescape
-from .audio_cache import AudioCache, CacheInterface
+from .audio_cache import AudioCache, CacheInterface, AudioCachePerWord
 
 import aiohttp
 import certifi
@@ -358,7 +358,7 @@ class Communicate:
 
         self.energy_safe_mode: bool = energy_safe_mode
         if self.energy_safe_mode:
-            self.disk_cache: CacheInterface = AudioCache()
+            self.disk_cache: CacheInterface = AudioCachePerWord()
             self.texts = split_text_in_words(text)
         else: 
             # Split the text into multiple strings and store them.
@@ -592,14 +592,14 @@ class Communicate:
             
             if self.energy_safe_mode:
                word = self.state["partial_text"]
-               cached = self.disk_cache.get(word)
+               cached = self.disk_cache.get(word.decode('utf-8'))
                if cached is not None:
                    for chunk in cached:
                        yield chunk
                    self.cacheHits += 1
                else:
                    audio = [chunk async for chunk in self.__stream()]
-                   self.disk_cache.put(word, audio)
+                   self.disk_cache.put(word.decode('utf-8'), audio)
                    for chunk in audio:
                        yield chunk
                    self.cacheMisses += 1
