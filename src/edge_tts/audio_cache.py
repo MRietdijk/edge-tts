@@ -219,3 +219,20 @@ class AudioCachePerWord(CacheInterface):
         
         with open(path, "wb") as f:
             f.write(serialize_chunks(data))
+
+
+class DictCache(CacheInterface):
+    def __init__(self) -> None:
+        self.cache = {}
+
+    def get(self, word: str) -> Optional[List[TTSChunk]]:
+        try:
+            return self.cache[word]
+        except KeyError:
+            return
+        
+    def put(self, key: str, data: list[TTSChunk]) -> None:
+        if key in self.cache:
+            raise KeyError(f"Cache entry {key} already exists!")
+        
+        self.cache[key] = data
