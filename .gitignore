@@ -168,3 +168,8 @@ cython_debug/
 
 #caches
 .tts_cache
+
+test_data/*
+!test_data/.gitkeep
+results/*
+!results/.gitkeep

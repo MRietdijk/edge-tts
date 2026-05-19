@@ -54,7 +54,7 @@ async def _run_tts(args: UtilArgs) -> None:
     communicate = Communicate(
         args.text,
         args.voice,
-        energy_safe_mode=True,
+        energy_safe_mode=args.enable_caching,
         rate=args.rate,
         volume=args.volume,
         pitch=args.pitch,
@@ -123,6 +123,7 @@ async def amain() -> None:
     parser.add_argument(
         "--version", action="version", version=f"edge-tts {__version__}"
     )
+    parser.add_argument("--enable-caching", help="enable caching of audio", action="store_true")
     args = parser.parse_args(namespace=UtilArgs())
 
     if args.list_voices:
