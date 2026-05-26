@@ -600,8 +600,13 @@ class Communicate:
                     print(f"Hit:\t{word}")
                 else:
                     audio = []
+                    total_duration = 0
                     try:
                         async for message in self.__stream():
+                            try:
+                                total_duration += (len(message['data'])*8)/56000
+                            except KeyError:
+                                pass
                             audio.append(message)
                     except aiohttp.ClientResponseError as e:
                         if e.status != 403:
@@ -610,6 +615,7 @@ class Communicate:
                         DRM.handle_client_response_error(e)
                         async for message in self.__stream():
                             audio.append(message)
+                    print(f"The duration is: {total_duration}")
                     self.disk_cache.put(word.decode('utf-8'), audio)
                     for chunk in audio:
                         yield chunk
@@ -617,15 +623,22 @@ class Communicate:
                     print(f"Miss:\t{word}\t{len(word)}")
             else:
                 try:
+                    total_duration = 0
                     async for message in self.__stream():
+                        try:
+                            total_duration += (len(message['data'])*8)/56000
+                        except KeyError:
+                            pass
                         yield message
                 except aiohttp.ClientResponseError as e:
                     if e.status != 403:
                         raise
-
+                
                     DRM.handle_client_response_error(e)
                     async for message in self.__stream():
                         yield message
+                
+                print(f"The duration is: {total_duration}")
         try:
             if self.energy_safe_mode:
                 self.disk_cache.save_index()

@@ -12,11 +12,6 @@ from .constants import DEFAULT_VOICE
 from .data_classes import UtilArgs
 from .version import __version__
 
-from pydub import AudioSegment
-from pydub.silence import split_on_silence
-from io import BytesIO
-
-
 async def _print_voices(*, proxy: Optional[str]) -> None:
     """Print all available voices."""
     voices = await list_voices(proxy=proxy)

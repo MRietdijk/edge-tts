@@ -22,8 +22,8 @@ def runFile(index, path: Path) -> None:
     energy_file = f"{index}_{ENERGY_OUT_FILE}"
     cache_stats_file = f"{index}_{CACHE_OUT_FILE}"
     process = subprocess.Popen(
-        # ["perf", "stat", "-e", "power/energy-pkg/,power/energy-cores/", "-o", OUTPUT_DIR.joinpath(energy_file).resolve(), "edge-tts", "--enable-caching", "--file", path.resolve(), "--write-media", MEDIA_OUTPUT.resolve()],
-        ["edge-tts", "--enable-caching", "--file", path.resolve(), "--write-media", MEDIA_OUTPUT.resolve()],
+        ["perf", "stat", "-e", "power/energy-pkg/,power/energy-cores/", "-o", OUTPUT_DIR.joinpath(energy_file).resolve(), "edge-tts", "--enable-caching", "--file", path.resolve(), "--write-media", MEDIA_OUTPUT.resolve()],
+        # ["edge-tts", "--enable-caching", "--file", path.resolve(), "--write-media", MEDIA_OUTPUT.resolve()],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True
