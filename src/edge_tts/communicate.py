@@ -358,7 +358,7 @@ class Communicate:
 
         self.energy_safe_mode: bool = energy_safe_mode
         if self.energy_safe_mode:
-            self.disk_cache: CacheInterface = AudioCache()
+            self.disk_cache: CacheInterface = DictCache()
             self.texts = split_text_in_words(text)
         else: 
             # Split the text into multiple strings and store them.
@@ -597,6 +597,7 @@ class Communicate:
                     for chunk in cached:
                        yield chunk
                     self.cacheHits += 1
+                    print(f"Hit:\t{word}")
                 else:
                     audio = []
                     try:
@@ -613,7 +614,7 @@ class Communicate:
                     for chunk in audio:
                         yield chunk
                     self.cacheMisses += 1
-                print(f"hits: {self.cacheHits}, misses: {self.cacheMisses}")
+                    print(f"Miss:\t{word}\t{len(word)}")
             else:
                 try:
                     async for message in self.__stream():
