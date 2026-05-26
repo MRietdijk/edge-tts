@@ -1,42 +1,44 @@
 from pathlib import Path
-from random import sample
 import subprocess
 from typing import List
 
-INPUT_DIR = Path("./test_data")
+SAMPLE_DIR = Path("./samples")
 MEDIA_OUTPUT = Path("./media.mp3")
 OUTPUT_DIR = Path("./results")
-SAMPLE_SIZE = 1
+
 ENERGY_OUT_FILE = "energy.txt"
 CACHE_OUT_FILE = "cache_stats.txt"
 
 
-def getSampleSet() -> List[Path]:
-    return [p for p in INPUT_DIR.iterdir() if p.is_file() and not p.name.startswith(".")]
 
-def getSample() -> List[Path]:
-    return sample(getSampleSet(), k=SAMPLE_SIZE)
-
-
-def runFile(index, path: Path) -> None:
+def runFile(index, path: Path, results_dir: Path) -> None:
     energy_file = f"{index}_{ENERGY_OUT_FILE}"
     cache_stats_file = f"{index}_{CACHE_OUT_FILE}"
-    process = subprocess.Popen(
-        ["perf", "stat", "-e", "power/energy-pkg/,power/energy-cores/", "-o", OUTPUT_DIR.joinpath(energy_file).resolve(), "edge-tts", "--enable-caching", "--file", path.resolve(), "--write-media", MEDIA_OUTPUT.resolve()],
-        # ["edge-tts", "--enable-caching", "--file", path.resolve(), "--write-media", MEDIA_OUTPUT.resolve()],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True
-    )
+    # process = subprocess.Popen(
+    #     # ["perf", "stat", "-e", "power/energy-pkg/,power/energy-cores/", "-o", results_dir.joinpath(energy_file).resolve(), "edge-tts", "--enable-caching", "--file", path.resolve(), "--write-media", MEDIA_OUTPUT.resolve()],
+    #     ["edge-tts", "--enable-caching", "--file", path.resolve(), "--write-media", MEDIA_OUTPUT.resolve()],
+    #     stdout=subprocess.PIPE,
+    #     stderr=subprocess.PIPE,
+    #     text=True
+    # )
 
-    stdout, stderr = process.communicate()
-    cache_stats_file_path = OUTPUT_DIR.joinpath(cache_stats_file)
+    # stdout, stderr = process.communicate()
+    stdout, stderr = ("aaa", "bbb")
+    cache_stats_file_path = results_dir.joinpath(cache_stats_file)
     with open(cache_stats_file_path, "w", encoding="utf-8") as file:
         file.write(f"STAT: {path}\t{path.stat().st_size}\n\nERR: {stderr}\n\nOUT: {stdout}")
 
 def run():
-    for i, file in enumerate(getSample()):
-        print(file, file.stat().st_size)
-        runFile(i, file)
+    for i, p in enumerate(SAMPLE_DIR.iterdir()):
+        paths = getPathsFromFile(p)
+        results_dir = OUTPUT_DIR.joinpath(Path(f"results_{i}/"))
+        results_dir.mkdir(exist_ok=True, parents=True)
+        for j, input in enumerate(paths):
+            runFile(j, input, results_dir)
+
+def getPathsFromFile(filePath: Path) -> List[Path]:
+    with open (filePath, 'r', encoding='utf-8') as f:
+        data = f.read()
+        return [Path(line) for line in data.splitlines()]
 
 run()
